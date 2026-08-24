@@ -111,20 +111,20 @@ export const DatabaseStatusIndicators: React.FC<DatabaseStatusIndicatorsProps> =
         {/* Separator */}
         <span className="text-slate-700 text-[10px] select-none">•</span>
 
-        {/* Voyant 2 : Firestore (Rouge / Base Secondaire & Réplication) */}
+        {/* Voyant 2 : Firestore (Vert / Base Secondaire & Réplication Active) */}
         <div 
           className="flex items-center justify-center relative p-0.5" 
-          title={firestoreStatus === 'connected' ? 'Base Secondaire : Firestore (Réplication Active)' : 'Base Secondaire : Firestore (Quota Dépassé)'}
+          title={firestoreStatus === 'connected' ? 'Base Secondaire : Firestore (Opérationnel / Réplication Active)' : 'Base Secondaire : Firestore (Quota Dépassé)'}
         >
           <span className="relative flex h-2.5 w-2.5">
             <span 
               className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                firestoreStatus === 'connected' ? 'bg-red-400' : 'bg-amber-400'
+                firestoreStatus === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'
               }`}
             ></span>
             <span 
               className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
-                firestoreStatus === 'connected' ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]' : 'bg-amber-500'
+                firestoreStatus === 'connected' ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.9)]' : 'bg-amber-500'
               }`}
             ></span>
           </span>
@@ -168,21 +168,21 @@ export const DatabaseStatusIndicators: React.FC<DatabaseStatusIndicatorsProps> =
             {/* Firestore Details (Secondary) */}
             <div className="flex items-start gap-2.5 bg-slate-900/70 p-2.5 rounded-xl border border-slate-800/60">
               <div className="mt-1">
-                <span className="flex h-2.5 w-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.9)]"></span>
+                <span className={`flex h-2.5 w-2.5 rounded-full ${firestoreStatus === 'connected' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.9)]' : 'bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.9)]'}`}></span>
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-1 mb-0.5">
-                  <p className="text-[10.5px] font-black text-red-400 uppercase tracking-tight">Base Secondaire : Firestore</p>
+                  <p className={`text-[10.5px] font-black uppercase tracking-tight ${firestoreStatus === 'connected' ? 'text-emerald-400' : 'text-amber-400'}`}>Base Secondaire : Firestore</p>
                   <span className={`text-[8px] font-extrabold px-1.5 py-0.5 rounded uppercase ${
-                    firestoreStatus === 'connected' ? 'bg-red-950/80 text-red-300 border border-red-800/50' : 'bg-amber-950/80 text-amber-300 border border-amber-800/50'
+                    firestoreStatus === 'connected' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/50' : 'bg-amber-950/80 text-amber-300 border border-amber-800/50'
                   }`}>
-                    {firestoreStatus === 'connected' ? 'Réplication' : 'Quota Dépassé'}
+                    {firestoreStatus === 'connected' ? 'Opérationnel' : 'Quota Dépassé'}
                   </span>
                 </div>
                 <p className="text-[9.5px] text-slate-300 leading-snug">
                   {firestoreStatus === 'connected' 
-                    ? 'Sauvegarde secondaire & réplication de secours active.' 
-                    : 'Quota Firestore atteint : Cloudflare D1 continue d\'assurer le service principal sans interruption.'}
+                    ? 'Sauvegarde secondaire & réplication cloud active.' 
+                    : 'Quota journalier Firestore atteint : Cloudflare D1 assure le service principal sans interruption.'}
                 </p>
               </div>
             </div>
