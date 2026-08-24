@@ -998,9 +998,7 @@ Rédigez une réponse claire, synthétique et très précise en français markdo
         const config = getCloudflareD1Config();
         if (!config || cfAuthFailed) return;
         
-        // High-performance bulk multi-row INSERT into Cloudflare D1
-        await queryCloudflareD1('DELETE FROM global_files');
-
+        // Incremental UPSERT into Cloudflare D1: updates existing rows by ID/SWO and adds new ones
         const BULK_CHUNK_SIZE = 50;
         for (let i = 0; i < items.length; i += BULK_CHUNK_SIZE) {
           const chunk = items.slice(i, i + BULK_CHUNK_SIZE);
