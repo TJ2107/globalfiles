@@ -202,46 +202,55 @@ export const saveToFirebase = async (data: GlobalFileRow[], append: boolean = fa
     finalData = uniqueRows;
   }
 
-  // 1. PRIMARY: Save directly to Cloudflare D1 / Local Relay
-  await saveToD1(finalData);
-  setDataSource('Cloudflare D1');
+  let savedToFirestore = false;
 
-  // 2. SECONDARY: Cache locally in browser localStorage
+  // 1. PRIMARY: Save directly to Google Firebase Firestore
+  if (!isForceD1Active()) {
+    try {
+      const BATCH_CHUNK_SIZE = 100;
+      for (let i = 0; i < finalData.length; i += BATCH_CHUNK_SIZE) {
+        if (isForceD1Active()) break;
+        const chunk = finalData.slice(i, i + BATCH_CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach(row => {
+          const id = row["N° SWO"] || row["PM number"] || ('row-' + Math.random().toString(36).substring(2, 9));
+          const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+          const docRef = doc(db, 'projects', PROJECT_ID, 'swo_data', safeId);
+          
+          const sanitizedRow = JSON.parse(JSON.stringify(row));
+          batch.set(docRef, { ...sanitizedRow, project_id: PROJECT_ID, updatedAt: Date.now() }, { merge: true });
+        });
+        await batch.commit();
+        if (i + BATCH_CHUNK_SIZE < finalData.length) {
+          await new Promise(r => setTimeout(r, 50));
+        }
+      }
+      savedToFirestore = true;
+      setDataSource('Firebase');
+      console.log(`Successfully saved ${finalData.length} records to Primary Firebase Firestore.`);
+    } catch (e) {
+      console.warn('Primary Firebase Firestore save notice (will ensure Cloudflare D1 backup):', e);
+      checkAndNotifyQuotaError(e);
+    }
+  }
+
+  // 2. SECONDARY / REPLICATION: Replicate to Cloudflare D1 & Local Relay
+  try {
+    await saveToD1(finalData);
+    if (!savedToFirestore) {
+      setDataSource('Cloudflare D1');
+    }
+  } catch (d1Err) {
+    console.warn('Secondary Cloudflare D1 replication notice:', d1Err);
+  }
+
+  // 3. Cache locally in browser localStorage
   if (typeof window !== 'undefined') {
     try {
       localStorage.setItem('cached_global_files', JSON.stringify(finalData));
     } catch {
       // ignore
     }
-  }
-
-  // 3. BACKGROUND REPLICATION (Optional / Non-blocking):
-  // When Cloudflare D1 is the primary store, avoid queuing synchronous heavy writes into Firestore client write-stream
-  if (!isForceD1Active()) {
-    (async () => {
-      try {
-        const BATCH_CHUNK_SIZE = 25;
-        // Limit background Firestore replica to latest 100 items to guarantee zero stream exhaustion
-        const replicaData = finalData.slice(0, 100);
-        for (let i = 0; i < replicaData.length; i += BATCH_CHUNK_SIZE) {
-          if (isForceD1Active()) break;
-          const chunk = replicaData.slice(i, i + BATCH_CHUNK_SIZE);
-          const batch = writeBatch(db);
-          chunk.forEach(row => {
-            const id = row["N° SWO"] || row["PM number"] || ('row-' + Math.random().toString(36).substring(2, 9));
-            const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
-            const docRef = doc(db, 'projects', PROJECT_ID, 'swo_data', safeId);
-            
-            const sanitizedRow = JSON.parse(JSON.stringify(row));
-            batch.set(docRef, { ...sanitizedRow, project_id: PROJECT_ID, updatedAt: Date.now() }, { merge: true });
-          });
-          await batch.commit();
-          await new Promise(r => setTimeout(r, 200));
-        }
-      } catch (e) {
-        checkAndNotifyQuotaError(e);
-      }
-    })().catch(() => {});
   }
 
   return finalData;
@@ -270,21 +279,7 @@ export const saveCommentToFirebase = async (siteId: string, category: string, co
     console.error('Failed to save comment to localStorage', err);
   }
 
-  // 1. PRIMARY: Save to Cloudflare D1
-  try {
-    const response = await fetch('/api/d1/comments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ site_id: siteId, category, comment })
-    });
-    if (!response.ok) {
-      console.warn('Notice: Primary Cloudflare D1 comment save status:', response.status);
-    }
-  } catch (err) {
-    console.warn('Notice: Primary Cloudflare D1 comment save error:', err);
-  }
-
-  // 2. SECONDARY / REPLICATION: Replicate to Firebase Firestore
+  // 1. PRIMARY: Save directly to Google Firebase Firestore
   if (!isForceD1Active()) {
     try {
       const safeId = `${siteId}_${category}`.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -295,32 +290,28 @@ export const saveCommentToFirebase = async (siteId: string, category: string, co
         updated_at: Date.now()
       }, { merge: true });
     } catch(e) {
-      console.warn('Notice: Secondary Firestore comment replication notice:', e);
+      console.warn('Notice: Primary Firestore comment save notice:', e);
       checkAndNotifyQuotaError(e);
     }
+  }
+
+  // 2. SECONDARY / REPLICATION: Replicate to Cloudflare D1
+  try {
+    const response = await fetch('/api/d1/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ site_id: siteId, category, comment })
+    });
+    if (!response.ok) {
+      console.warn('Notice: Secondary Cloudflare D1 comment save status:', response.status);
+    }
+  } catch (err) {
+    console.warn('Notice: Secondary Cloudflare D1 comment save error:', err);
   }
 };
 
 export const fetchCommentsFromFirebase = async (): Promise<{site_id: string, category: string, comment: string}[]> => {
-  // 1. PRIMARY: Fetch from Cloudflare D1
-  try {
-    const response = await fetch('/api/d1/comments');
-    if (response.ok) {
-      const d1Data = await response.json();
-      if (d1Data && d1Data.success && Array.isArray(d1Data.comments)) {
-        console.log(`Loaded comments from Primary Cloudflare D1 (count: ${d1Data.comments.length})`);
-        // Update local cache
-        try {
-          localStorage.setItem('local_comments', JSON.stringify(d1Data.comments));
-        } catch { /* ignore */ }
-        return d1Data.comments;
-      }
-    }
-  } catch (d1Err) {
-    console.warn('Primary Cloudflare D1 comments fetch unavailable, trying secondary Firestore:', d1Err);
-  }
-
-  // 2. SECONDARY FALLBACK: Firebase Firestore
+  // 1. PRIMARY: Fetch from Google Firebase Firestore
   if (!isForceD1Active()) {
     try {
       const querySnapshot = await getDocs(collection(db, 'projects', PROJECT_ID, 'manual_comments'));
@@ -340,12 +331,33 @@ export const fetchCommentsFromFirebase = async (): Promise<{site_id: string, cat
             });
           } catch { /* ignore */ }
         });
+        // Update local cache
+        try {
+          localStorage.setItem('local_comments', JSON.stringify(comments));
+        } catch { /* ignore */ }
         return comments;
       }
     } catch (e) {
-      console.warn('Secondary Firestore comments fetch notice:', e);
+      console.warn('Primary Firestore comments fetch notice, falling back to Cloudflare D1:', e);
       checkAndNotifyQuotaError(e);
     }
+  }
+
+  // 2. SECONDARY FALLBACK: Cloudflare D1
+  try {
+    const response = await fetch('/api/d1/comments');
+    if (response.ok) {
+      const d1Data = await response.json();
+      if (d1Data && d1Data.success && Array.isArray(d1Data.comments)) {
+        console.log(`Loaded comments from Secondary Cloudflare D1 (count: ${d1Data.comments.length})`);
+        try {
+          localStorage.setItem('local_comments', JSON.stringify(d1Data.comments));
+        } catch { /* ignore */ }
+        return d1Data.comments;
+      }
+    }
+  } catch (d1Err) {
+    console.warn('Secondary Cloudflare D1 comments fetch unavailable:', d1Err);
   }
 
   // 3. TERTIARY FALLBACK: LocalStorage
@@ -371,25 +383,7 @@ export const fetchFromFirebase = async (): Promise<GlobalFileRow[]> => {
     return [];
   };
 
-  // 1. PRIMARY: Fetch from Cloudflare D1 / Local Relay
-  try {
-    const response = await fetch('/api/d1/global-files');
-    if (response.ok) {
-      const d1Data = await response.json();
-      if (d1Data && d1Data.success && Array.isArray(d1Data.rows) && d1Data.rows.length > 0) {
-        console.log(`Loaded ${d1Data.rows.length} rows from Primary Cloudflare D1 (${d1Data.source || 'Active'}).`);
-        if (typeof window !== 'undefined') {
-          try { localStorage.setItem('cached_global_files', JSON.stringify(d1Data.rows)); } catch {}
-        }
-        setDataSource('Cloudflare D1');
-        return d1Data.rows;
-      }
-    }
-  } catch (d1Err) {
-    console.warn('Primary Cloudflare D1 fetch error, falling back to secondary Firestore:', d1Err);
-  }
-
-  // 2. SECONDARY FALLBACK: Firebase Firestore
+  // 1. PRIMARY: Fetch from Google Firebase Firestore
   if (!isForceD1Active()) {
     try {
       const querySnapshot = await getDocs(collection(db, 'projects', PROJECT_ID, 'swo_data'));
@@ -399,16 +393,37 @@ export const fetchFromFirebase = async (): Promise<GlobalFileRow[]> => {
       });
       
       if (rows.length > 0) {
-        console.log(`Loaded ${rows.length} rows from Secondary Firebase Firestore.`);
+        console.log(`Loaded ${rows.length} rows from Primary Firebase Firestore.`);
         setDataSource('Firebase');
-        // Replicate to Primary Cloudflare D1 in background
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('cached_global_files', JSON.stringify(rows)); } catch {}
+        }
+        // Replicate to Secondary Cloudflare D1 in background
         saveToD1(rows).catch(err => console.warn('Notice: Background D1 replication notice:', err));
         return rows;
       }
     } catch (e) {
-      console.warn('Secondary Firebase Firestore fetch error:', e);
+      console.warn('Primary Firebase Firestore fetch notice, checking Cloudflare D1 backup:', e);
       checkAndNotifyQuotaError(e);
     }
+  }
+
+  // 2. SECONDARY FALLBACK: Cloudflare D1 / Local Relay
+  try {
+    const response = await fetch('/api/d1/global-files');
+    if (response.ok) {
+      const d1Data = await response.json();
+      if (d1Data && d1Data.success && Array.isArray(d1Data.rows) && d1Data.rows.length > 0) {
+        console.log(`Loaded ${d1Data.rows.length} rows from Secondary Cloudflare D1 (${d1Data.source || 'Active'}).`);
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('cached_global_files', JSON.stringify(d1Data.rows)); } catch {}
+        }
+        setDataSource('Cloudflare D1');
+        return d1Data.rows;
+      }
+    }
+  } catch (d1Err) {
+    console.warn('Secondary Cloudflare D1 fetch error:', d1Err);
   }
 
   // 3. TERTIARY FALLBACK A: LocalStorage Cache
@@ -423,7 +438,7 @@ export const fetchFromFirebase = async (): Promise<GlobalFileRow[]> => {
   try {
     const pmRows = await fetchPMFromFirebase();
     if (Array.isArray(pmRows) && pmRows.length > 0) {
-      setDataSource('Cloudflare D1');
+      setDataSource('Firebase');
       return pmRows.map(r => ({
         "ID": (r.site_code || r.id || '') as string,
         "PM number": (r.pm_number || '') as string,
@@ -440,25 +455,12 @@ export const fetchFromFirebase = async (): Promise<GlobalFileRow[]> => {
     }
   } catch {}
 
-  setDataSource('Cloudflare D1');
+  setDataSource('Firebase');
   return [];
 };
 
 export const fetchPMFromFirebase = async (): Promise<Record<string, unknown>[]> => {
-  // 1. PRIMARY: Fetch from Cloudflare D1
-  try {
-    const response = await fetch('/api/d1/pm');
-    if (response.ok) {
-      const d1Data = await response.json();
-      if (d1Data && d1Data.success && Array.isArray(d1Data.rows) && d1Data.rows.length > 0) {
-        return d1Data.rows;
-      }
-    }
-  } catch (d1Err) {
-    console.warn('Primary Cloudflare D1 PM fetch unavailable, trying secondary Firestore:', d1Err);
-  }
-
-  // 2. SECONDARY FALLBACK: Firebase Firestore
+  // 1. PRIMARY: Fetch from Google Firebase Firestore
   if (!isForceD1Active()) {
     try {
       const querySnapshot = await getDocs(collection(db, 'projects', PROJECT_ID, 'pm_assignments'));
@@ -470,9 +472,22 @@ export const fetchPMFromFirebase = async (): Promise<Record<string, unknown>[]> 
         return rows;
       }
     } catch (e) {
-      console.warn('Secondary Firestore PM fetch notice:', e);
+      console.warn('Primary Firestore PM fetch notice, trying Cloudflare D1 backup:', e);
       checkAndNotifyQuotaError(e);
     }
+  }
+
+  // 2. SECONDARY FALLBACK: Cloudflare D1
+  try {
+    const response = await fetch('/api/d1/pm');
+    if (response.ok) {
+      const d1Data = await response.json();
+      if (d1Data && d1Data.success && Array.isArray(d1Data.rows) && d1Data.rows.length > 0) {
+        return d1Data.rows;
+      }
+    }
+  } catch (d1Err) {
+    console.warn('Secondary Cloudflare D1 PM fetch unavailable:', d1Err);
   }
 
   return [];
@@ -482,7 +497,38 @@ export const syncPMToFirebase = async (payloads: Record<string, unknown>[]): Pro
   let successCount = 0;
   const failCount = 0;
 
-  // 1. PRIMARY: Save to Cloudflare D1
+  // 1. PRIMARY: Save directly to Google Firebase Firestore
+  if (!isForceD1Active()) {
+    try {
+      const PM_CHUNK_SIZE = 100;
+      for (let i = 0; i < payloads.length; i += PM_CHUNK_SIZE) {
+        if (isForceD1Active()) break;
+        const chunk = payloads.slice(i, i + PM_CHUNK_SIZE);
+        const batch = writeBatch(db);
+        chunk.forEach(payload => {
+          const pmNum = payload.pm_number || ('pm-' + Math.random().toString(36).substring(2, 9));
+          const safeId = String(pmNum).replace(/[^a-zA-Z0-9_-]/g, '_');
+          
+          const docRef1 = doc(db, 'projects', PROJECT_ID, 'pm_assignments', safeId);
+          batch.set(docRef1, { ...payload, updated_at: Date.now() }, { merge: true });
+
+          const docRef2 = doc(db, 'projects', PROJECT_ID, 'daily_raw_data', safeId);
+          batch.set(docRef2, { ...payload, imported_at: Date.now() }, { merge: true });
+        });
+        await batch.commit();
+        if (i + PM_CHUNK_SIZE < payloads.length) {
+          await new Promise(r => setTimeout(r, 50));
+        }
+      }
+      successCount = payloads.length;
+      console.log(`Successfully saved ${payloads.length} PM assignments to Primary Firebase Firestore.`);
+    } catch (e) {
+      console.warn('Primary Firebase Firestore PM sync notice:', e);
+      checkAndNotifyQuotaError(e);
+    }
+  }
+
+  // 2. SECONDARY / REPLICATION: Replicate to Cloudflare D1
   try {
     const d1Payloads = payloads.map(payload => {
       const pmNum = payload.pm_number || ('pm-' + Math.random().toString(36).substring(2, 9));
@@ -509,43 +555,12 @@ export const syncPMToFirebase = async (payloads: Record<string, unknown>[]): Pro
       body: JSON.stringify(d1Payloads)
     });
 
-    if (response.ok) {
+    if (response.ok && successCount === 0) {
       successCount = payloads.length;
-      console.log(`Successfully saved ${payloads.length} PM assignments to Primary Cloudflare D1`);
-    } else {
-      console.warn('Cloudflare D1 PM sync status:', response.status);
+      console.log(`Successfully saved ${payloads.length} PM assignments to Secondary Cloudflare D1`);
     }
   } catch (d1Err) {
-    console.error('Primary Cloudflare D1 PM sync error:', d1Err);
-  }
-
-  // 2. SECONDARY / REPLICATION: Replicate to Firebase Firestore asynchronously without blocking
-  if (!isForceD1Active()) {
-    (async () => {
-      try {
-        const PM_CHUNK_SIZE = 25;
-        const replicaPayloads = payloads.slice(0, 100);
-        for (let i = 0; i < replicaPayloads.length; i += PM_CHUNK_SIZE) {
-          if (isForceD1Active()) break;
-          const chunk = replicaPayloads.slice(i, i + PM_CHUNK_SIZE);
-          const batch = writeBatch(db);
-          chunk.forEach(payload => {
-            const pmNum = payload.pm_number || ('pm-' + Math.random().toString(36).substring(2, 9));
-            const safeId = String(pmNum).replace(/[^a-zA-Z0-9_-]/g, '_');
-            
-            const docRef1 = doc(db, 'projects', PROJECT_ID, 'pm_assignments', safeId);
-            batch.set(docRef1, { ...payload, updated_at: Date.now() }, { merge: true });
-
-            const docRef2 = doc(db, 'projects', PROJECT_ID, 'daily_raw_data', safeId);
-            batch.set(docRef2, { ...payload, imported_at: Date.now() }, { merge: true });
-          });
-          await batch.commit();
-          await new Promise(r => setTimeout(r, 200));
-        }
-      } catch (e) {
-        checkAndNotifyQuotaError(e);
-      }
-    })().catch(() => {});
+    console.error('Secondary Cloudflare D1 PM sync error:', d1Err);
   }
 
   if (successCount === 0 && failCount === 0) {
@@ -556,19 +571,7 @@ export const syncPMToFirebase = async (payloads: Record<string, unknown>[]): Pro
 };
 
 export const clearFirebaseData = async () => {
-  // 1. PRIMARY: Clear Cloudflare D1
-  try {
-    await fetch('/api/d1/global-files', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify([])
-    });
-    console.log('Successfully cleared Primary Cloudflare D1 data.');
-  } catch (e) {
-    console.error('Failed to clear Cloudflare D1 database:', e);
-  }
-
-  // 2. SECONDARY: Clear Firebase Firestore
+  // 1. PRIMARY: Clear Firebase Firestore
   if (!isForceD1Active()) {
     try {
       const querySnapshot = await getDocs(collection(db, 'projects', PROJECT_ID, 'swo_data'));
@@ -582,11 +585,23 @@ export const clearFirebaseData = async () => {
         });
         await batch.commit();
       }
-      console.log('Successfully cleared Secondary Firebase Firestore data.');
+      console.log('Successfully cleared Primary Firebase Firestore data.');
     } catch(e) {
-      console.warn('Secondary Firestore clear notice:', e);
+      console.warn('Primary Firestore clear notice:', e);
       checkAndNotifyQuotaError(e);
     }
+  }
+
+  // 2. SECONDARY: Clear Cloudflare D1
+  try {
+    await fetch('/api/d1/global-files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([])
+    });
+    console.log('Successfully cleared Secondary Cloudflare D1 data.');
+  } catch (e) {
+    console.error('Failed to clear Cloudflare D1 database:', e);
   }
 
   if (typeof window !== 'undefined') {
