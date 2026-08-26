@@ -147,7 +147,7 @@ export const UserGuide: React.FC<UserGuideProps> = ({ userRole, onNavigateTab })
       title: 'Stock & GMAO',
       icon: Package,
       iconBg: 'from-amber-600 to-amber-700',
-      roles: ['Admin', 'Manager'],
+      roles: ['Admin'],
       category: 'Logistique',
       summary: 'Gestion de stock de pièces de rechange et consommables.',
       details: 'Suit les mouvements de stock de composants de remplacement, l\'inventaire des pièces critiques et le matériel en réserve.'

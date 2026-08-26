@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, Layout, Calendar, Timer, 
   Briefcase, Battery, Settings2, FileText, MapPin, 
-  Sparkles, ArrowRight, X, Command, Sliders
+  Sparkles, ArrowRight, X, Command, Sliders, Package
 } from 'lucide-react';
 import { GlobalFileRow, isAllowedModule, UserRole } from '../types';
 import { useAuth } from './AuthProvider';
@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { id: 'tas', label: 'Analyse TAS', icon: Sliders, desc: 'Tickets & catégories TAS' },
   { id: 'battery', label: 'Suivi Batteries', icon: Battery, desc: 'Remplacement & santé batteries' },
   { id: 'belt', label: 'Suivi Courroies', icon: Briefcase, desc: 'Maintenance courroies' },
+  { id: 'gmao', label: 'Stock & GMAO', icon: Package, desc: 'Gestion de stock, pièces remplacées & matériel' },
   { id: 'guide', label: 'Guide d\'Utilisation', icon: FileText, desc: 'Documentation & rôles de l\'application' },
   { id: 'rapport', label: 'Rapport d\'Activité Consolidé', icon: FileText, desc: 'Exportation de rapports consolidés' },
   { id: 'settings', label: 'Paramètres', icon: Settings2, desc: 'Configuration système & utilisateurs' },

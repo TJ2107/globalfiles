@@ -146,15 +146,15 @@ const MODULES: ModuleItem[] = [
     minRole: 'User'
   },
   {
-    id: 'gmao_stock',
+    id: 'gmao',
     label: 'Stock & GMAO',
     description: "Suivi des pièces remplacées, consommations et calibrations.",
     icon: Package,
-    colorClass: 'text-cyan-500 bg-cyan-500/10',
-    bgClass: 'from-cyan-50/50 to-white dark:from-cyan-950/20 dark:to-slate-900',
-    borderClass: 'border-cyan-100 dark:border-cyan-900/50',
+    colorClass: 'text-amber-500 bg-amber-500/10',
+    bgClass: 'from-amber-50/50 to-white dark:from-amber-950/20 dark:to-slate-900',
+    borderClass: 'border-amber-100 dark:border-amber-900/50',
     category: 'technique',
-    minRole: 'User'
+    minRole: 'Admin'
   },
   {
     id: 'export',

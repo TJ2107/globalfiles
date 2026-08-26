@@ -85,10 +85,10 @@ export const isAllowedModule = (role: string | null | undefined, moduleId: strin
   const userRole = (role as UserRole) || 'User';
   if (userRole === 'Admin') return true;
 
-  // Import Excel is strictly Admin only
-  if (moduleId === 'upload') return false;
+  // Import Excel and Stock & GMAO are strictly Admin only
+  if (moduleId === 'upload' || moduleId === 'gmao' || moduleId === 'gmao_stock' || moduleId === 'stock') return false;
 
-  // Manager has access to all modules except upload
+  // Manager has access to all modules except upload and stock/gmao
   if (userRole === 'Manager') return true;
 
   // FE and User roles only have access to daily status, parc batteries, audit courroies, guide (and portal)
